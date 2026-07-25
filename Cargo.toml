@@ -8,6 +8,10 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+clap = { version = "4.6.4", features = ["derive"] }
+tree-sitter = "0.26.11"
+tree-sitter-rust = "0.24.2"
+thiserror = "2"
 
 [workspace.lints.clippy]
 nursery = { level = "warn", priority = -1 }
