@@ -582,6 +582,7 @@ fn has_preceding_eligible_on_line(
 
         current -= 1;
     }
+
     false
 }
 
@@ -605,6 +606,7 @@ fn has_blank_line(bytes: &[u8]) -> bool {
             return true;
         }
     }
+
     false
 }
 
@@ -618,5 +620,6 @@ fn line_indent(source: &[u8], position: usize) -> &[u8] {
         .iter()
         .position(|byte| !matches!(byte, b' ' | b'\t'))
         .map_or(position, |index| start + index);
+
     &source[start..end]
 }

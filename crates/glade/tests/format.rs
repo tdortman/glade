@@ -18,6 +18,7 @@ fn fixture_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock is after epoch")
         .as_nanos();
+
     std::env::temp_dir().join(format!("glade-{name}-{}-{nonce}.rs", std::process::id()))
 }
 
