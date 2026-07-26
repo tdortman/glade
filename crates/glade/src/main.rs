@@ -45,7 +45,7 @@ enum FileError {
 }
 
 #[derive(Clone, Copy)]
-struct ItemSpan {
+struct BoundarySpan {
     start: usize,
     end: usize,
     multiline: bool,
@@ -62,12 +62,13 @@ struct Patch {
 fn main() {
     let Cli { command } = Cli::parse();
     let Command::Format { files } = command;
-
     let mut failed = false;
+
     for path in files {
         match format_file(&path) {
             Ok(true) => eprintln!("{}", path.display()),
             Ok(false) => {}
+
             Err(error) => {
                 eprintln!("{}: {error}", path.display());
                 failed = true;
@@ -88,16 +89,17 @@ fn format_file(path: &Path) -> Result<bool, FileError> {
     let source = fs::read_to_string(path)?;
     let formatted = format_source(source.as_bytes())?;
     let changed = formatted != source.as_bytes();
+
     if changed {
         fs::write(path, formatted)?;
     }
+
     Ok(changed)
 }
 
 fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     let line_ending = line_ending(source)?;
     let source_text = std::str::from_utf8(source).map_err(|_| FormatError::Parse)?;
-
     let mut parser = TreeSitterParser::new();
 
     parser
@@ -115,7 +117,6 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     let mut patches = Vec::new();
     format_container(source, tree.root_node(), line_ending, &mut patches);
     patches.sort_by_key(|patch| patch.start);
-
     let mut output = source.to_vec();
 
     for patch in patches.into_iter().rev() {
@@ -152,19 +153,34 @@ fn format_container(
     patches: &mut Vec<Patch>,
 ) {
     let children = named_children(container);
+    let separator = separator_for(container.kind());
+    let attach_visibility = container.kind() == "ordered_field_declaration_list";
 
-    let item_indices: Vec<_> = children
+    let eligible_indices: Vec<_> = children
         .iter()
         .enumerate()
-        .filter_map(|(index, child)| is_item(child.kind()).then_some(index))
+        .filter_map(|(index, child)| {
+            (is_eligible_child(container.kind(), child.kind())
+                || (container.kind() == "block" && is_block_tail_expression(child.kind())))
+            .then_some(index)
+        })
         .collect();
 
-    let items: Vec<_> = item_indices
+    let boundary_spans: Vec<_> = eligible_indices
         .iter()
-        .map(|index| item_span(source, &children, *index))
+        .map(|index| {
+            boundary_span(
+                source,
+                &children,
+                *index,
+                separator,
+                attach_visibility,
+                &eligible_indices,
+            )
+        })
         .collect();
 
-    for pair in items.windows(2) {
+    for pair in boundary_spans.windows(2) {
         let [previous, next] = pair else {
             unreachable!()
         };
@@ -202,39 +218,236 @@ fn format_container(
         });
     }
 
-    for index in item_indices {
-        let item = children[index];
+    for child in children {
+        format_nested_containers(
+            source,
+            child,
+            line_ending,
+            patches,
+            container.kind() == "block",
+            true,
+        );
+    }
+}
 
-        if item.kind() != "mod_item" {
-            continue;
-        }
+fn format_nested_containers(
+    source: &[u8],
+    node: Node<'_>,
+    line_ending: &[u8],
+    patches: &mut Vec<Patch>,
+    allow_expression_bodies: bool,
+    allow_structural_bodies: bool,
+) {
+    if is_atomic(node.kind()) {
+        return;
+    }
 
-        if let Some(body) = named_children(item)
-            .into_iter()
-            .find(|child| child.kind() == "declaration_list")
-        {
-            format_container(source, body, line_ending, patches);
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if is_container(child.kind()) {
+            if is_container_body(node, child)
+                && (allow_expression_bodies
+                    || node.kind() == "closure_expression"
+                    || (allow_structural_bodies && is_structural_body(node.kind())))
+            {
+                format_container(source, child, line_ending, patches);
+            } else {
+                format_nested_containers(source, child, line_ending, patches, false, false);
+            }
+        } else if !is_atomic(child.kind()) {
+            let child_allows_bodies = allow_expression_bodies
+                && ((node.kind() == "expression_statement" && is_block_expression(child.kind()))
+                    || (node.kind() == "if_expression" && child.kind() == "else_clause")
+                    || (node.kind() == "else_clause" && child.kind() == "if_expression"));
+
+            format_nested_containers(
+                source,
+                child,
+                line_ending,
+                patches,
+                child_allows_bodies,
+                allow_structural_bodies && is_structural_body(node.kind()),
+            );
         }
     }
 }
 
-fn item_span(source: &[u8], children: &[Node<'_>], index: usize) -> ItemSpan {
-    let item = children[index];
-    let mut start = item.start_byte();
+fn is_atomic(kind: &str) -> bool {
+    matches!(kind, "macro_definition" | "macro_invocation" | "token_tree")
+}
+
+fn is_structural_body(kind: &str) -> bool {
+    matches!(
+        kind,
+        "closure_expression"
+            | "enum_item"
+            | "enum_variant"
+            | "foreign_mod_item"
+            | "function_item"
+            | "impl_item"
+            | "mod_item"
+            | "struct_item"
+            | "trait_item"
+            | "union_item"
+    )
+}
+
+fn is_block_expression(kind: &str) -> bool {
+    matches!(
+        kind,
+        "async_block"
+            | "const_block"
+            | "for_expression"
+            | "gen_block"
+            | "if_expression"
+            | "loop_expression"
+            | "match_expression"
+            | "try_block"
+            | "unsafe_block"
+            | "while_expression"
+    )
+}
+
+fn is_container(kind: &str) -> bool {
+    matches!(
+        kind,
+        "block"
+            | "declaration_list"
+            | "enum_variant_list"
+            | "field_declaration_list"
+            | "match_block"
+            | "ordered_field_declaration_list"
+    )
+}
+
+fn separator_for(kind: &str) -> Option<u8> {
+    match kind {
+        "source_file" | "declaration_list" => Some(b';'),
+
+        "enum_variant_list" | "field_declaration_list" | "ordered_field_declaration_list" => {
+            Some(b',')
+        }
+
+        _ => None,
+    }
+}
+
+fn is_eligible_child(container: &str, child: &str) -> bool {
+    match container {
+        "source_file" | "declaration_list" => is_item(child),
+
+        "block" => {
+            (is_item(child)
+                || matches!(
+                    child,
+                    "empty_statement" | "expression_statement" | "let_declaration"
+                ))
+                && !matches!(child, "attribute_item" | "inner_attribute_item")
+        }
+
+        "enum_variant_list" => child == "enum_variant",
+        "field_declaration_list" => child == "field_declaration",
+        "match_block" => child == "match_arm",
+
+        "ordered_field_declaration_list" => !matches!(
+            child,
+            "attribute_item"
+                | "block_comment"
+                | "inner_attribute_item"
+                | "line_comment"
+                | "visibility_modifier"
+        ),
+
+        _ => false,
+    }
+}
+
+fn is_block_tail_expression(kind: &str) -> bool {
+    !is_item(kind)
+        && !matches!(
+            kind,
+            "attribute_item"
+                | "block_comment"
+                | "empty_statement"
+                | "inner_attribute_item"
+                | "let_declaration"
+                | "line_comment"
+                | "expression_statement"
+        )
+}
+
+fn is_container_body(parent: Node<'_>, child: Node<'_>) -> bool {
+    match child.kind() {
+        "block" => match parent.kind() {
+            "async_block" | "const_block" | "else_clause" | "gen_block" | "loop_expression"
+            | "try_block" | "unsafe_block" | "while_expression" => true,
+
+            "closure_expression" | "for_expression" | "function_item" => {
+                has_child_field(parent, "body", child)
+            }
+
+            "if_expression" => has_child_field(parent, "consequence", child),
+            "let_declaration" => has_child_field(parent, "alternative", child),
+            _ => false,
+        },
+
+        "declaration_list" => {
+            matches!(
+                parent.kind(),
+                "foreign_mod_item" | "impl_item" | "mod_item" | "trait_item"
+            ) && has_child_field(parent, "body", child)
+        }
+
+        "enum_variant_list" => {
+            parent.kind() == "enum_item" && has_child_field(parent, "body", child)
+        }
+
+        "field_declaration_list" | "ordered_field_declaration_list" => {
+            matches!(parent.kind(), "enum_variant" | "struct_item" | "union_item")
+                && has_child_field(parent, "body", child)
+        }
+
+        "match_block" => {
+            parent.kind() == "match_expression" && has_child_field(parent, "body", child)
+        }
+
+        _ => false,
+    }
+}
+
+fn has_child_field(parent: Node<'_>, field: &str, child: Node<'_>) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|candidate| candidate.start_byte() == child.start_byte())
+}
+
+fn boundary_span(
+    source: &[u8],
+    children: &[Node<'_>],
+    index: usize,
+    separator: Option<u8>,
+    attach_visibility: bool,
+    eligible: &[usize],
+) -> BoundarySpan {
+    let construct = children[index];
+    let mut start = construct.start_byte();
     let mut previous = index;
 
     while previous > 0 {
         let candidate = children[previous - 1];
 
-        if !is_attachment(candidate, source)
+        if !(is_attachment(candidate, source)
+            || (attach_visibility && candidate.kind() == "visibility_modifier"))
             || (has_blank_line(&source[candidate.end_byte()..start])
-                && !is_outer_attribute(candidate, source))
+                && !is_outer_attribute(candidate, source)
+                && !(attach_visibility && candidate.kind() == "visibility_modifier"))
         {
             break;
         }
 
         if matches!(candidate.kind(), "line_comment" | "block_comment")
-            && has_preceding_item_on_line(source, children, previous - 1)
+            && has_preceding_eligible_on_line(source, children, previous - 1, eligible)
         {
             break;
         }
@@ -243,8 +456,21 @@ fn item_span(source: &[u8], children: &[Node<'_>], index: usize) -> ItemSpan {
         previous -= 1;
     }
 
-    let mut end = item.end_byte();
+    let mut end = construct.end_byte();
     let mut next = index + 1;
+
+    if let Some(separator) = separator {
+        let limit = children.get(next).map_or(source.len(), Node::start_byte);
+        let mut separator_start = end;
+
+        while separator_start < limit && source[separator_start].is_ascii_whitespace() {
+            separator_start += 1;
+        }
+
+        if source.get(separator_start) == Some(&separator) {
+            end = separator_start + 1;
+        }
+    }
 
     while let Some(candidate) = children.get(next).copied() {
         if !is_trailing_comment(candidate) || has_line_break(&source[end..candidate.start_byte()]) {
@@ -255,17 +481,30 @@ fn item_span(source: &[u8], children: &[Node<'_>], index: usize) -> ItemSpan {
         next += 1;
     }
 
+    if let Some(separator) = separator {
+        let limit = children.get(next).map_or(source.len(), Node::start_byte);
+        let mut separator_start = end;
+
+        while separator_start < limit && source[separator_start].is_ascii_whitespace() {
+            separator_start += 1;
+        }
+
+        if source.get(separator_start) == Some(&separator) {
+            end = separator_start + 1;
+        }
+    }
+
     let barrier_before = previous > 0
-        && start != item.start_byte()
+        && start != construct.start_byte()
         && matches!(children[previous].kind(), "line_comment" | "block_comment")
         && has_blank_line(&source[children[previous - 1].end_byte()..start]);
 
-    let barrier_after = end != item.end_byte()
+    let barrier_after = next > index + 1
         && children
             .get(next)
             .is_some_and(|candidate| has_blank_line(&source[end..candidate.start_byte()]));
 
-    ItemSpan {
+    BoundarySpan {
         start,
         end,
         multiline: has_line_break(&source[start..end]),
@@ -282,11 +521,13 @@ fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
 fn is_item(kind: &str) -> bool {
     matches!(
         kind,
-        "const_item"
+        "associated_type"
+            | "const_item"
             | "enum_item"
             | "extern_crate_declaration"
             | "foreign_mod_item"
             | "function_item"
+            | "function_signature_item"
             | "impl_item"
             | "macro_definition"
             | "macro_invocation"
@@ -317,22 +558,28 @@ fn is_trailing_comment(node: Node<'_>) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
-fn has_preceding_item_on_line(source: &[u8], children: &[Node<'_>], comment_index: usize) -> bool {
+fn has_preceding_eligible_on_line(
+    source: &[u8],
+    children: &[Node<'_>],
+    comment_index: usize,
+    eligible: &[usize],
+) -> bool {
     let mut current = comment_index;
+
     while current > 0 {
         let previous = children[current - 1];
         let comment = children[current];
+
         if !is_trailing_comment(comment)
             || has_line_break(&source[previous.end_byte()..comment.start_byte()])
         {
             return false;
         }
-        if is_item(previous.kind()) {
-            return true;
-        }
+
         if !matches!(previous.kind(), "line_comment" | "block_comment") {
-            return false;
+            return eligible.contains(&(current - 1));
         }
+
         current -= 1;
     }
     false
@@ -347,10 +594,13 @@ fn has_blank_line(bytes: &[u8]) -> bool {
         if *byte != b'\n' {
             continue;
         }
+
         let mut next = index + 1;
+
         while next < bytes.len() && matches!(bytes[next], b' ' | b'\t' | b'\r') {
             next += 1;
         }
+
         if next < bytes.len() && bytes[next] == b'\n' {
             return true;
         }
@@ -363,6 +613,7 @@ fn line_indent(source: &[u8], position: usize) -> &[u8] {
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index + 1);
+
     let end = source[start..position]
         .iter()
         .position(|byte| !matches!(byte, b' ' | b'\t'))
