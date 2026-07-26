@@ -743,6 +743,7 @@ fn format_preserves_items_inside_nested_blocks() {
 #[test]
 fn verbose_flag_emits_tracing_details() {
     let path = fixture_path("verbose");
+
     fs::write(
         &path,
         "struct First {\n    value: i32,\n}\nfn second() {}\n",
@@ -758,15 +759,18 @@ fn verbose_flag_emits_tracing_details() {
 
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     let stderr = String::from_utf8_lossy(&output.stderr);
+
     assert!(
         stderr.contains("formatting input files"),
         "binary={} stderr={stderr}",
         env!("CARGO_BIN_EXE_glade")
     );
+
     assert!(
         stderr.contains("parsing source with tree-sitter"),
         "{stderr}"
     );
+
     assert!(stderr.contains("applying formatting patch"), "{stderr}");
     fs::remove_file(path).expect("remove fixture");
 }

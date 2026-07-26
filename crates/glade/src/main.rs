@@ -74,7 +74,6 @@ fn main() {
     let Cli { command, verbose } = Cli::parse();
     init_tracing(verbose);
     debug!(?command, "parsed command");
-
     let Command::Format { files } = command;
     info!(files = files.len(), "formatting input files");
     let mut failed = false;
@@ -124,9 +123,9 @@ fn format_file(path: &Path) -> Result<bool, FileError> {
     debug!("reading source");
     let source = fs::read_to_string(path)?;
     debug!(bytes = source.len(), "source read");
-
     let formatted = format_source(source.as_bytes())?;
     let changed = formatted != source.as_bytes();
+
     debug!(
         changed,
         bytes_before = source.len(),
@@ -145,6 +144,7 @@ fn format_file(path: &Path) -> Result<bool, FileError> {
 #[instrument(skip(source), fields(bytes = source.len()))]
 fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     let line_ending = line_ending(source)?;
+
     debug!(
         style = if line_ending == b"\r\n" { "CRLF" } else { "LF" },
         "detected line ending"
@@ -154,6 +154,7 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
         warn!("source is not valid UTF-8");
         FormatError::Parse
     })?;
+
     let mut parser = TreeSitterParser::new();
 
     parser
@@ -161,6 +162,7 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
         .expect("Rust grammar loads");
 
     trace!("parsing source with tree-sitter");
+
     let tree = parser
         .parse(source_text, None)
         .expect("Tree-sitter returns a tree");
@@ -183,6 +185,7 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
             replacement_bytes = patch.replacement.len(),
             "applying formatting patch"
         );
+
         output.splice(patch.start..patch.end, patch.replacement);
     }
 
@@ -202,6 +205,7 @@ fn line_ending(source: &[u8]) -> Result<&'static [u8], FormatError> {
         .iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'\r' && source.get(index + 1) != Some(&b'\n'));
+
     trace!(has_crlf, has_lf, has_lone_cr, "inspected line endings");
 
     if has_lone_cr || (has_crlf && has_lf) {
@@ -239,6 +243,7 @@ fn format_container(
             .then_some(index)
         })
         .collect();
+
     trace!(
         children = children.len(),
         eligible = eligible_indices.len(),
@@ -297,6 +302,7 @@ fn format_container(
             end: next.start,
             replacement,
         });
+
         trace!(
             start = previous.end,
             end = next.start,
@@ -337,7 +343,6 @@ fn format_nested_containers(
 ) {
     if is_atomic(node.kind()) {
         trace!("skipping atomic node");
-
         return;
     }
 
@@ -351,7 +356,6 @@ fn format_nested_containers(
                     || (allow_structural_bodies && is_structural_body(node.kind())))
             {
                 trace!(child_kind = child.kind(), "formatting nested container");
-
                 format_container(source, child, line_ending, patches);
             } else {
                 trace!(child_kind = child.kind(), "descending into nested node");
