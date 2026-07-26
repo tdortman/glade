@@ -1,6 +1,53 @@
 # glade
 
-Glade is a formatter that adds canonical blank lines between crowded, multiline language constructs. It changes boundary whitespace only. Comments, attributes, tokens, indentation, line endings, and all other source text stay under the caller's control.
+Glade is an opinionated, source-preserving formatter that adds empty lines between adjacent multiline language constructs. When either construct spans multiple lines, Glade inserts exactly one blank line between them. It does not try to apply every rule from a language's style guide.
+
+For example:
+
+```rust
+struct Document {
+    source: String,
+    changed: bool,
+}
+impl Document {
+    fn format(&self) {
+        let source = self.source.trim();
+        if source.is_empty() {
+            return;
+        }
+        println!("{source}");
+    }
+    fn check(&self) {}
+}
+fn main() {}
+```
+
+becomes:
+
+```rust
+struct Document {
+    source: String,
+    changed: bool,
+}
+
+impl Document {
+    fn format(&self) {
+        let source = self.source.trim();
+
+        if source.is_empty() {
+            return;
+        }
+
+        println!("{source}");
+    }
+
+    fn check(&self) {}
+}
+
+fn main() {}
+```
+
+Glade changes boundary whitespace only. Comments, attributes, tokens, indentation, line endings, and all other source text stay under the caller's control.
 
 ## Supported languages
 
