@@ -22,6 +22,7 @@ enum Command {
         files: Vec<PathBuf>,
     },
 }
+
 #[derive(Debug, Error)]
 enum FormatError {
     #[error("Rust source contains syntax errors")]

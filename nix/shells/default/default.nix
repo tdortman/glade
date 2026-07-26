@@ -4,6 +4,7 @@ let
 in
 pkgs.mkShell {
   nativeBuildInputs = with pkgs; [
+    cargo-flamegraph
     cargo-nextest
     cmake
     pkg-config
