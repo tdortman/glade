@@ -4,18 +4,29 @@ use std::{
     process,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use thiserror::Error;
+use tracing::{debug, error, info, instrument, trace, warn};
+use tracing_subscriber::filter::LevelFilter;
 use tree_sitter::{Node, Parser as TreeSitterParser};
 
 #[derive(Parser)]
 #[command(name = "glade")]
 struct Cli {
+    #[arg(
+        short = 'v',
+        long,
+        global = true,
+        action = ArgAction::Count,
+        help = "enable verbose logging, repeat for more detail"
+    )]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     Format {
         #[arg(value_name = "FILE", required = true)]
@@ -60,8 +71,12 @@ struct Patch {
 }
 
 fn main() {
-    let Cli { command } = Cli::parse();
+    let Cli { command, verbose } = Cli::parse();
+    init_tracing(verbose);
+    debug!(?command, "parsed command");
+
     let Command::Format { files } = command;
+    info!(files = files.len(), "formatting input files");
     let mut failed = false;
 
     for path in files {
@@ -70,6 +85,7 @@ fn main() {
             Ok(false) => {}
 
             Err(error) => {
+                error!(path = %path.display(), error = %error, "formatting failed");
                 eprintln!("{}: {error}", path.display());
                 failed = true;
             }
@@ -77,55 +93,103 @@ fn main() {
     }
 
     if failed {
+        warn!("one or more files failed to format");
         process::exit(2);
     }
 }
 
+fn init_tracing(verbosity: u8) {
+    let max_level = match verbosity {
+        0 => LevelFilter::OFF,
+        1 => LevelFilter::INFO,
+        2 => LevelFilter::DEBUG,
+        _ => LevelFilter::TRACE,
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(max_level)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .compact()
+        .init();
+}
+
+#[instrument(skip_all, fields(path = %path.display()))]
 fn format_file(path: &Path) -> Result<bool, FileError> {
     if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+        warn!("unsupported file extension");
         return Err(FileError::UnsupportedExtension);
     }
 
+    debug!("reading source");
     let source = fs::read_to_string(path)?;
+    debug!(bytes = source.len(), "source read");
+
     let formatted = format_source(source.as_bytes())?;
     let changed = formatted != source.as_bytes();
+    debug!(
+        changed,
+        bytes_before = source.len(),
+        bytes_after = formatted.len(),
+        "formatting complete"
+    );
 
     if changed {
+        info!("writing formatted source");
         fs::write(path, formatted)?;
     }
 
     Ok(changed)
 }
 
+#[instrument(skip(source), fields(bytes = source.len()))]
 fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     let line_ending = line_ending(source)?;
-    let source_text = std::str::from_utf8(source).map_err(|_| FormatError::Parse)?;
+    debug!(
+        style = if line_ending == b"\r\n" { "CRLF" } else { "LF" },
+        "detected line ending"
+    );
+
+    let source_text = std::str::from_utf8(source).map_err(|_| {
+        warn!("source is not valid UTF-8");
+        FormatError::Parse
+    })?;
     let mut parser = TreeSitterParser::new();
 
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .expect("Rust grammar loads");
 
+    trace!("parsing source with tree-sitter");
     let tree = parser
         .parse(source_text, None)
         .expect("Tree-sitter returns a tree");
 
     if tree.root_node().has_error() {
+        warn!("tree-sitter reported syntax errors");
         return Err(FormatError::Parse);
     }
 
     let mut patches = Vec::new();
     format_container(source, tree.root_node(), line_ending, &mut patches);
+    debug!(patches = patches.len(), "generated formatting patches");
     patches.sort_by_key(|patch| patch.start);
     let mut output = source.to_vec();
 
     for patch in patches.into_iter().rev() {
+        trace!(
+            start = patch.start,
+            end = patch.end,
+            replacement_bytes = patch.replacement.len(),
+            "applying formatting patch"
+        );
         output.splice(patch.start..patch.end, patch.replacement);
     }
 
     Ok(output)
 }
 
+#[instrument(skip(source), fields(bytes = source.len()))]
 fn line_ending(source: &[u8]) -> Result<&'static [u8], FormatError> {
     let has_crlf = source.windows(2).any(|pair| pair == b"\r\n");
 
@@ -138,14 +202,24 @@ fn line_ending(source: &[u8]) -> Result<&'static [u8], FormatError> {
         .iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'\r' && source.get(index + 1) != Some(&b'\n'));
+    trace!(has_crlf, has_lf, has_lone_cr, "inspected line endings");
 
     if has_lone_cr || (has_crlf && has_lf) {
+        warn!("mixed line endings detected");
         return Err(FormatError::MixedLineEndings);
     }
 
     Ok(if has_crlf { b"\r\n" } else { b"\n" })
 }
 
+#[instrument(
+    skip(source, line_ending, patches),
+    fields(
+        kind = container.kind(),
+        start = container.start_byte(),
+        end = container.end_byte()
+    )
+)]
 fn format_container(
     source: &[u8],
     container: Node<'_>,
@@ -165,6 +239,13 @@ fn format_container(
             .then_some(index)
         })
         .collect();
+    trace!(
+        children = children.len(),
+        eligible = eligible_indices.len(),
+        separator = ?separator,
+        attach_visibility,
+        "analysing container"
+    );
 
     let boundary_spans: Vec<_> = eligible_indices
         .iter()
@@ -216,6 +297,12 @@ fn format_container(
             end: next.start,
             replacement,
         });
+        trace!(
+            start = previous.end,
+            end = next.start,
+            required,
+            "scheduled whitespace patch"
+        );
     }
 
     for child in children {
@@ -230,6 +317,16 @@ fn format_container(
     }
 }
 
+#[instrument(
+    skip(source, line_ending, patches),
+    fields(
+        kind = node.kind(),
+        start = node.start_byte(),
+        end = node.end_byte(),
+        allow_expression_bodies,
+        allow_structural_bodies
+    )
+)]
 fn format_nested_containers(
     source: &[u8],
     node: Node<'_>,
@@ -239,6 +336,8 @@ fn format_nested_containers(
     allow_structural_bodies: bool,
 ) {
     if is_atomic(node.kind()) {
+        trace!("skipping atomic node");
+
         return;
     }
 
@@ -251,8 +350,11 @@ fn format_nested_containers(
                     || node.kind() == "closure_expression"
                     || (allow_structural_bodies && is_structural_body(node.kind())))
             {
+                trace!(child_kind = child.kind(), "formatting nested container");
+
                 format_container(source, child, line_ending, patches);
             } else {
+                trace!(child_kind = child.kind(), "descending into nested node");
                 format_nested_containers(source, child, line_ending, patches, false, false);
             }
         } else if !is_atomic(child.kind()) {
