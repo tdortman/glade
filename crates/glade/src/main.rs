@@ -49,6 +49,7 @@ struct ItemSpan {
     end: usize,
     multiline: bool,
     barrier_before: bool,
+    barrier_after: bool,
 }
 
 struct Patch {
@@ -167,9 +168,10 @@ fn format_container(
             unreachable!()
         };
 
-        if next.barrier_before {
+        if previous.barrier_after || next.barrier_before {
             continue;
         }
+
         let gap = &source[previous.end..next.start];
 
         if !gap.iter().all(u8::is_ascii_whitespace) {
@@ -223,7 +225,9 @@ fn item_span(source: &[u8], children: &[Node<'_>], index: usize) -> ItemSpan {
     while previous > 0 {
         let candidate = children[previous - 1];
 
-        if !is_attachment(candidate, source) || has_blank_line(&source[candidate.end_byte()..start])
+        if !is_attachment(candidate, source)
+            || (has_blank_line(&source[candidate.end_byte()..start])
+                && !is_outer_attribute(candidate, source))
         {
             break;
         }
@@ -252,13 +256,20 @@ fn item_span(source: &[u8], children: &[Node<'_>], index: usize) -> ItemSpan {
 
     let barrier_before = previous > 0
         && start != item.start_byte()
+        && matches!(children[previous].kind(), "line_comment" | "block_comment")
         && has_blank_line(&source[children[previous - 1].end_byte()..start]);
+
+    let barrier_after = end != item.end_byte()
+        && children
+            .get(next)
+            .is_some_and(|candidate| has_blank_line(&source[end..candidate.start_byte()]));
 
     ItemSpan {
         start,
         end,
         multiline: has_line_break(&source[start..end]),
         barrier_before,
+        barrier_after,
     }
 }
 
@@ -291,14 +302,20 @@ fn is_item(kind: &str) -> bool {
 fn is_attachment(node: Node<'_>, source: &[u8]) -> bool {
     match node.kind() {
         "line_comment" | "block_comment" => true,
-        "attribute_item" => !source[node.start_byte()..node.end_byte()].starts_with(b"#!["),
+        "attribute_item" => is_outer_attribute(node, source),
         _ => false,
     }
+}
+
+fn is_outer_attribute(node: Node<'_>, source: &[u8]) -> bool {
+    node.kind() == "attribute_item"
+        && !source[node.start_byte()..node.end_byte()].starts_with(b"#![")
 }
 
 fn is_trailing_comment(node: Node<'_>) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
+
 fn has_preceding_item_on_line(source: &[u8], children: &[Node<'_>], comment_index: usize) -> bool {
     let mut current = comment_index;
     while current > 0 {
