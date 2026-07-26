@@ -5,12 +5,19 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn run_format(path: &PathBuf) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_glade"))
-        .arg("format")
-        .arg(path)
-        .output()
-        .expect("formatter runs")
+fn run_format(path: &std::path::Path) -> std::process::Output {
+    run_cli("format", &[path])
+}
+
+fn run_cli(command: &str, paths: &[&std::path::Path]) -> std::process::Output {
+    let mut process = Command::new(env!("CARGO_BIN_EXE_glade"));
+    process.arg(command);
+
+    for path in paths {
+        process.arg(path);
+    }
+
+    process.output().expect("formatter runs")
 }
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -50,12 +57,7 @@ fn second() {}
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -67,9 +69,28 @@ fn format_keeps_single_line_items_without_extra_blank_lines() {
 ";
 
     fs::write(&path, source).expect("write fixture");
+
+    #[cfg(unix)]
+    let before_inode = {
+        use std::os::unix::fs::MetadataExt;
+
+        fs::metadata(&path).expect("read fixture metadata").ino()
+    };
+
     let output = run_format(&path);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert_eq!(fs::read_to_string(&path).expect("read fixture"), source);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        assert_eq!(
+            fs::metadata(&path).expect("read formatted metadata").ino(),
+            before_inode
+        );
+    }
+
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
@@ -80,7 +101,7 @@ fn format_preserves_comment_barriers_with_indented_blank_lines() {
     let path = fixture_path("comment-barrier");
 
     let source = r"// standalone
-    
+
 fn first() {}
 fn second() {}
 ";
@@ -137,12 +158,7 @@ fn second() {}
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -201,12 +217,7 @@ fn second() {}
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -262,12 +273,7 @@ fn second() {}
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -326,12 +332,7 @@ fn format_separates_items_inside_inline_modules() {
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -407,12 +408,7 @@ fn line_indent(source: &[u8], position: usize) -> &[u8] {
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -474,12 +470,7 @@ trait Handler {
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -590,12 +581,7 @@ enum Choice {
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -696,12 +682,7 @@ fn expressions() {
     );
 
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(output.stderr.is_empty());
     fs::remove_file(path).expect("remove fixture");
 }
 
@@ -757,11 +738,7 @@ fn second() {}
     let output = run_format(&path);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
+    assert!(output.stderr.is_empty());
 
     assert_eq!(
         fs::read(&path).expect("read formatted fixture"),
@@ -794,11 +771,7 @@ fn second() {}
     let output = run_format(&path);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
+    assert!(output.stderr.is_empty());
 
     assert_eq!(
         fs::read(&path).expect("read formatted fixture"),
@@ -829,11 +802,7 @@ fn second() {}
     let output = run_format(&path);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert!(output.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("{}\n", path.display())
-    );
+    assert!(output.stderr.is_empty());
 
     let expected = r"struct First {
     value: i32,
@@ -937,12 +906,7 @@ fn second() {}
     let first = run_format(&path);
     assert!(first.status.success(), "stderr: {:?}", first.stderr);
     assert!(first.stdout.is_empty());
-
-    assert_eq!(
-        String::from_utf8_lossy(&first.stderr),
-        format!("{}\n", path.display())
-    );
-
+    assert!(first.stderr.is_empty());
     let formatted = fs::read(&path).expect("read formatted fixture");
     let second = run_format(&path);
     assert!(second.status.success(), "stderr: {:?}", second.stderr);
@@ -989,4 +953,141 @@ fn second() {}
 
     assert!(stderr.contains("applying formatting patch"), "{stderr}");
     fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn check_reports_drift_without_mutating_the_file() {
+    let path = fixture_path("check-drift");
+
+    let source = r"struct First {
+    value: i32,
+}
+fn second() {}
+";
+
+    fs::write(&path, source).expect("write fixture");
+    let output = run_cli("check", &[path.as_path()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&path).expect("read fixture"), source);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let diff_path = path.display().to_string().replace('\\', "/");
+    assert!(stdout.contains(&format!("--- {diff_path}")));
+    assert!(stdout.contains(&format!("+++ {diff_path}")));
+    assert!(stdout.contains("@@"));
+    assert!(stdout.contains("\n+\n"));
+    assert!(output.stderr.is_empty());
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn check_reports_success_for_canonical_input() {
+    let path = fixture_path("check-canonical");
+    let source = "fn first() {}   fn second() {}\n";
+    fs::write(&path, source).expect("write fixture");
+    let output = run_cli("check", &[path.as_path()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&path).expect("read fixture"), source);
+    assert_eq!(output.stdout, b"All checks passed!\n");
+    assert!(output.stderr.is_empty());
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn check_reports_operational_errors_with_status_two() {
+    let path = fixture_path("check-error");
+    let source = b"fn broken(";
+    fs::write(&path, source).expect("write fixture");
+    let output = run_cli("check", &[path.as_path()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(fs::read(&path).expect("read fixture"), source);
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("syntax errors"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("line"));
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_continues_after_one_file_fails() {
+    let bad_path = fixture_path("multi-error").with_extension("txt");
+    let parse_path = fixture_path("multi-parse");
+    let good_path = fixture_path("multi-good");
+
+    let source = r"struct First {
+    value: i32,
+}
+fn second() {}
+";
+
+    fs::write(&bad_path, "not Rust").expect("write bad fixture");
+    fs::write(&parse_path, "fn broken(").expect("write parse fixture");
+    fs::write(&good_path, source).expect("write good fixture");
+
+    let output = run_cli("format", &[
+        bad_path.as_path(),
+        parse_path.as_path(),
+        good_path.as_path(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+
+    assert_eq!(
+        fs::read_to_string(&good_path).expect("read good fixture"),
+        r"struct First {
+    value: i32,
+}
+
+fn second() {}
+"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&bad_path.display().to_string()));
+    assert!(stderr.contains("unsupported file extension"));
+    assert!(stderr.contains(&parse_path.display().to_string()));
+    assert!(stderr.contains("syntax errors"));
+    assert!(output.stdout.is_empty());
+    fs::remove_file(bad_path).expect("remove bad fixture");
+    fs::remove_file(parse_path).expect("remove parse fixture");
+    fs::remove_file(good_path).expect("remove good fixture");
+}
+
+#[test]
+fn format_preserves_permissions_when_replacing_content() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let path = fixture_path("permissions");
+
+        fs::write(
+            &path,
+            r"struct First {
+    value: i32,
+}
+fn second() {}
+",
+        )
+        .expect("write fixture");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+            .expect("set fixture permissions");
+
+        let before = fs::metadata(&path).expect("read fixture metadata");
+        let output = run_cli("format", &[path.as_path()]);
+        let after = fs::metadata(&path).expect("read formatted metadata");
+
+        assert!(output.status.success(), "stderr: {:?}", output.stderr);
+        assert_eq!(after.permissions().mode(), before.permissions().mode());
+        assert_ne!(after.ino(), before.ino());
+
+        fs::remove_file(path).expect("remove fixture");
+    }
+}
+
+#[test]
+fn missing_files_are_usage_errors() {
+    let output = run_cli("check", &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("required"));
 }

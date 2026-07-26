@@ -1,10 +1,13 @@
 use std::{
-    fs, io,
+    borrow::Cow,
+    fs::{self, OpenOptions},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     process,
 };
 
 use clap::{ArgAction, Parser, Subcommand};
+use similar::TextDiff;
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_subscriber::filter::LevelFilter;
@@ -32,12 +35,23 @@ enum Command {
         #[arg(value_name = "FILE", required = true)]
         files: Vec<PathBuf>,
     },
+
+    Check {
+        #[arg(value_name = "FILE", required = true)]
+        files: Vec<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Format,
+    Check,
 }
 
 #[derive(Debug, Error)]
 enum FormatError {
-    #[error("Rust source contains syntax errors")]
-    Parse,
+    #[error("Rust source contains syntax errors at line {line}, column {column}")]
+    Parse { line: usize, column: usize },
 
     #[error("Rust source is not valid UTF-8")]
     InvalidUtf8,
@@ -82,17 +96,36 @@ struct Patch {
     replacement: Vec<u8>,
 }
 
+enum ProcessResult {
+    Success,
+    Drift(String),
+}
+
 fn main() {
     let Cli { command, verbose } = Cli::parse();
     init_tracing(verbose);
     debug!(?command, "parsed command");
-    let Command::Format { files } = command;
+    process::exit(run(command));
+}
+
+fn run(command: Command) -> i32 {
+    let (mode, files) = match command {
+        Command::Format { files } => (Mode::Format, files),
+        Command::Check { files } => (Mode::Check, files),
+    };
+
     info!(files = files.len(), "formatting input files");
     let mut failed = false;
+    let mut drift = false;
 
     for path in files {
-        match format_file(&path) {
-            Ok(_) => {}
+        match process_file(&path, mode) {
+            Ok(ProcessResult::Drift(diff)) => {
+                print_diff(&diff);
+                drift = true;
+            }
+
+            Ok(ProcessResult::Success) => {}
 
             Err(error) => {
                 error!(path = %path.display(), error = %error, "formatting failed");
@@ -104,7 +137,14 @@ fn main() {
 
     if failed {
         warn!("one or more files failed to format");
-        process::exit(2);
+        2
+    } else if mode == Mode::Check && drift {
+        1
+    } else if mode == Mode::Check {
+        print_check_success();
+        0
+    } else {
+        0
     }
 }
 
@@ -124,8 +164,8 @@ fn init_tracing(verbosity: u8) {
         .init();
 }
 
-#[instrument(skip_all, fields(path = %path.display()))]
-fn format_file(path: &Path) -> Result<bool, FileError> {
+#[instrument(skip_all, fields(path = %path.display(), ?mode))]
+fn process_file(path: &Path, mode: Mode) -> Result<ProcessResult, FileError> {
     if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
         warn!("unsupported file extension");
         return Err(FileError::UnsupportedExtension);
@@ -144,12 +184,144 @@ fn format_file(path: &Path) -> Result<bool, FileError> {
         "formatting complete"
     );
 
-    if changed {
-        info!("writing formatted source");
-        fs::write(path, formatted)?;
+    if !changed {
+        return Ok(ProcessResult::Success);
     }
 
-    Ok(changed)
+    if mode == Mode::Format {
+        let permissions = fs::metadata(path)?.permissions();
+        info!("atomically replacing formatted source");
+        replace_file(path, &formatted, permissions)?;
+        return Ok(ProcessResult::Success);
+    }
+
+    Ok(ProcessResult::Drift(render_diff(path, &source, &formatted)))
+}
+
+fn render_diff(path: &Path, source: &[u8], formatted: &[u8]) -> String {
+    let source = normalise_line_endings(std::str::from_utf8(source).expect("source is UTF-8"));
+
+    let formatted =
+        normalise_line_endings(std::str::from_utf8(formatted).expect("formatted source is UTF-8"));
+
+    let path = path.display().to_string().replace('\\', "/");
+
+    TextDiff::from_lines(&source, &formatted)
+        .unified_diff()
+        .header(&path, &path)
+        .to_string()
+}
+
+fn print_diff(diff: &str) {
+    if should_colour_output() {
+        print!("{}", colour_diff(diff));
+    } else {
+        print!("{diff}");
+    }
+}
+
+fn colour_diff(diff: &str) -> String {
+    const BOLD: &str = "\x1b[1m";
+    const CYAN: &str = "\x1b[36m";
+    const GREEN: &str = "\x1b[32m";
+    const RED: &str = "\x1b[31m";
+    const RESET: &str = "\x1b[0m";
+    let mut coloured = String::with_capacity(diff.len());
+
+    for line in diff.split_inclusive('\n') {
+        let colour = if line.starts_with("---") || line.starts_with("+++") {
+            BOLD
+        } else if line.starts_with('+') {
+            GREEN
+        } else if line.starts_with('-') {
+            RED
+        } else if line.starts_with("@@") {
+            CYAN
+        } else {
+            ""
+        };
+
+        if colour.is_empty() {
+            coloured.push_str(line);
+        } else {
+            coloured.push_str(colour);
+            coloured.push_str(line);
+            coloured.push_str(RESET);
+        }
+    }
+
+    coloured
+}
+
+fn should_colour_output() -> bool {
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn normalise_line_endings(source: &str) -> Cow<'_, str> {
+    if source.contains('\r') {
+        Cow::Owned(source.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(source)
+    }
+}
+
+fn print_check_success() {
+    const MESSAGE: &str = "All checks passed!";
+
+    if should_colour_output() {
+        println!("\x1b[32m{MESSAGE}\x1b[0m");
+    } else {
+        println!("{MESSAGE}");
+    }
+}
+
+#[instrument(skip(contents), fields(path = %path.display(), bytes = contents.len()))]
+fn replace_file(path: &Path, contents: &[u8], permissions: fs::Permissions) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+
+    let name = path.file_name().map_or_else(
+        || "source".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+
+    for attempt in 0..100 {
+        let temporary = parent.join(format!(".{name}.glade-{}-{attempt}.tmp", process::id()));
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+
+        let file = match options.open(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        let result = (|| {
+            let mut file = file;
+            file.write_all(contents)?;
+            file.set_permissions(permissions)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, path)
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+
+        return result;
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a unique temporary file",
+    ))
 }
 
 #[instrument(skip(source), fields(bytes = source.len()))]
@@ -186,8 +358,11 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     }
 
     if root.has_error() {
-        warn!("tree-sitter reported syntax errors");
-        return Err(FormatError::Parse);
+        let position = first_error_position(root).unwrap_or_else(|| root.start_position());
+        let line = position.row + 1;
+        let column = position.column + 1;
+        warn!(line, column, "tree-sitter reported syntax errors");
+        return Err(FormatError::Parse { line, column });
     }
 
     let mut patches = Vec::new();
@@ -217,6 +392,15 @@ fn has_missing_node(node: Node<'_>) -> bool {
 
     let mut cursor = node.walk();
     node.children(&mut cursor).any(has_missing_node)
+}
+
+fn first_error_position(node: Node<'_>) -> Option<tree_sitter::Point> {
+    if node.kind() == "ERROR" {
+        return Some(node.start_position());
+    }
+
+    let mut cursor = node.walk();
+    node.children(&mut cursor).find_map(first_error_position)
 }
 
 fn validate_patches(source: &[u8], patches: &mut Vec<Patch>) -> Result<(), FormatError> {
@@ -882,5 +1066,16 @@ mod tests {
             validate_patches(b"\x0b", &mut patches),
             Err(FormatError::UnsafeRewrite)
         ));
+    }
+
+    #[test]
+    fn colour_diff_marks_headers_hunks_and_changes() {
+        let coloured = colour_diff("--- path\n+++ path\n@@ -1 +1 @@\n context\n-old\n+new\n");
+        assert!(coloured.contains("\x1b[1m--- path\n\x1b[0m"));
+        assert!(coloured.contains("\x1b[1m+++ path\n\x1b[0m"));
+        assert!(coloured.contains("\x1b[36m@@ -1 +1 @@\n\x1b[0m"));
+        assert!(coloured.contains(" context\n"));
+        assert!(coloured.contains("\x1b[31m-old\n\x1b[0m"));
+        assert!(coloured.contains("\x1b[32m+new\n\x1b[0m"));
     }
 }
