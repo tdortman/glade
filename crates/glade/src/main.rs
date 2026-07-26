@@ -39,8 +39,20 @@ enum FormatError {
     #[error("Rust source contains syntax errors")]
     Parse,
 
+    #[error("Rust source is not valid UTF-8")]
+    InvalidUtf8,
+
+    #[error("Rust parser returned an incomplete syntax tree")]
+    MissingStructure,
+
     #[error("source mixes LF and CRLF line endings")]
     MixedLineEndings,
+
+    #[error("formatting patches overlap or conflict")]
+    PatchConflict,
+
+    #[error("editable whitespace range contains non-whitespace bytes")]
+    UnsafeRewrite,
 }
 
 #[derive(Debug, Error)]
@@ -80,8 +92,7 @@ fn main() {
 
     for path in files {
         match format_file(&path) {
-            Ok(true) => eprintln!("{}", path.display()),
-            Ok(false) => {}
+            Ok(_) => {}
 
             Err(error) => {
                 error!(path = %path.display(), error = %error, "formatting failed");
@@ -121,10 +132,10 @@ fn format_file(path: &Path) -> Result<bool, FileError> {
     }
 
     debug!("reading source");
-    let source = fs::read_to_string(path)?;
+    let source = fs::read(path)?;
     debug!(bytes = source.len(), "source read");
-    let formatted = format_source(source.as_bytes())?;
-    let changed = formatted != source.as_bytes();
+    let formatted = format_source(&source)?;
+    let changed = formatted != source;
 
     debug!(
         changed,
@@ -152,7 +163,7 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
 
     let source_text = std::str::from_utf8(source).map_err(|_| {
         warn!("source is not valid UTF-8");
-        FormatError::Parse
+        FormatError::InvalidUtf8
     })?;
 
     let mut parser = TreeSitterParser::new();
@@ -167,15 +178,22 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
         .parse(source_text, None)
         .expect("Tree-sitter returns a tree");
 
-    if tree.root_node().has_error() {
+    let root = tree.root_node();
+
+    if root.kind() != "source_file" || has_missing_node(root) {
+        warn!("tree-sitter returned an incomplete syntax tree");
+        return Err(FormatError::MissingStructure);
+    }
+
+    if root.has_error() {
         warn!("tree-sitter reported syntax errors");
         return Err(FormatError::Parse);
     }
 
     let mut patches = Vec::new();
-    format_container(source, tree.root_node(), line_ending, &mut patches);
+    format_container(source, root, line_ending, &mut patches)?;
     debug!(patches = patches.len(), "generated formatting patches");
-    patches.sort_by_key(|patch| patch.start);
+    validate_patches(source, &mut patches)?;
     let mut output = source.to_vec();
 
     for patch in patches.into_iter().rev() {
@@ -190,6 +208,49 @@ fn format_source(source: &[u8]) -> Result<Vec<u8>, FormatError> {
     }
 
     Ok(output)
+}
+
+fn has_missing_node(node: Node<'_>) -> bool {
+    if node.is_missing() {
+        return true;
+    }
+
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(has_missing_node)
+}
+
+fn validate_patches(source: &[u8], patches: &mut Vec<Patch>) -> Result<(), FormatError> {
+    patches.sort_by_key(|patch| (patch.start, patch.end));
+    let mut validated: Vec<Patch> = Vec::with_capacity(patches.len());
+
+    for patch in patches.drain(..) {
+        let Some(range) = source.get(patch.start..patch.end) else {
+            return Err(FormatError::UnsafeRewrite);
+        };
+
+        if !range.iter().all(|byte| is_editable_whitespace(*byte)) {
+            return Err(FormatError::UnsafeRewrite);
+        }
+
+        if let Some(previous) = validated.last() {
+            if previous.start == patch.start && previous.end == patch.end {
+                if previous.replacement == patch.replacement {
+                    continue;
+                }
+
+                return Err(FormatError::PatchConflict);
+            }
+
+            if previous.end > patch.start {
+                return Err(FormatError::PatchConflict);
+            }
+        }
+
+        validated.push(patch);
+    }
+
+    *patches = validated;
+    Ok(())
 }
 
 #[instrument(skip(source), fields(bytes = source.len()))]
@@ -229,7 +290,7 @@ fn format_container(
     container: Node<'_>,
     line_ending: &[u8],
     patches: &mut Vec<Patch>,
-) {
+) -> Result<(), FormatError> {
     let children = named_children(container);
     let separator = separator_for(container.kind());
     let attach_visibility = container.kind() == "ordered_field_declaration_list";
@@ -277,8 +338,14 @@ fn format_container(
 
         let gap = &source[previous.end..next.start];
 
-        if !gap.iter().all(u8::is_ascii_whitespace) {
-            continue;
+        if !gap.iter().all(|byte| is_editable_whitespace(*byte)) {
+            warn!(
+                start = previous.end,
+                end = next.start,
+                "editable whitespace range contains non-whitespace bytes"
+            );
+
+            return Err(FormatError::UnsafeRewrite);
         }
 
         let required = previous.multiline || next.multiline;
@@ -319,8 +386,10 @@ fn format_container(
             patches,
             container.kind() == "block",
             true,
-        );
+        )?;
     }
+
+    Ok(())
 }
 
 #[instrument(
@@ -340,10 +409,10 @@ fn format_nested_containers(
     patches: &mut Vec<Patch>,
     allow_expression_bodies: bool,
     allow_structural_bodies: bool,
-) {
+) -> Result<(), FormatError> {
     if is_atomic(node.kind()) {
         trace!("skipping atomic node");
-        return;
+        return Ok(());
     }
 
     let mut cursor = node.walk();
@@ -356,10 +425,10 @@ fn format_nested_containers(
                     || (allow_structural_bodies && is_structural_body(node.kind())))
             {
                 trace!(child_kind = child.kind(), "formatting nested container");
-                format_container(source, child, line_ending, patches);
+                format_container(source, child, line_ending, patches)?;
             } else {
                 trace!(child_kind = child.kind(), "descending into nested node");
-                format_nested_containers(source, child, line_ending, patches, false, false);
+                format_nested_containers(source, child, line_ending, patches, false, false)?;
             }
         } else if !is_atomic(child.kind()) {
             let child_allows_bodies = allow_expression_bodies
@@ -374,9 +443,11 @@ fn format_nested_containers(
                 patches,
                 child_allows_bodies,
                 allow_structural_bodies && is_structural_body(node.kind()),
-            );
+            )?;
         }
     }
+
+    Ok(())
 }
 
 fn is_atomic(kind: &str) -> bool {
@@ -696,6 +767,10 @@ fn has_line_break(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
 }
 
+const fn is_editable_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
+}
+
 fn has_blank_line(bytes: &[u8]) -> bool {
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'\n' {
@@ -728,4 +803,84 @@ fn line_indent(source: &[u8], position: usize) -> &[u8] {
         .map_or(position, |index| start + index);
 
     &source[start..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identical_patches_are_deduplicated() {
+        let mut patches = vec![
+            Patch {
+                start: 0,
+                end: 1,
+                replacement: b"\n".to_vec(),
+            },
+            Patch {
+                start: 0,
+                end: 1,
+                replacement: b"\n".to_vec(),
+            },
+        ];
+
+        validate_patches(b" ", &mut patches).expect("identical patches are safe");
+        assert_eq!(patches.len(), 1);
+    }
+
+    #[test]
+    fn overlapping_patches_are_rejected() {
+        let mut patches = vec![
+            Patch {
+                start: 0,
+                end: 2,
+                replacement: b"\n".to_vec(),
+            },
+            Patch {
+                start: 1,
+                end: 2,
+                replacement: b"\n".to_vec(),
+            },
+        ];
+
+        assert!(matches!(
+            validate_patches(b"  ", &mut patches),
+            Err(FormatError::PatchConflict)
+        ));
+    }
+
+    #[test]
+    fn conflicting_insertions_are_rejected() {
+        let mut patches = vec![
+            Patch {
+                start: 1,
+                end: 1,
+                replacement: b"a".to_vec(),
+            },
+            Patch {
+                start: 1,
+                end: 1,
+                replacement: b"b".to_vec(),
+            },
+        ];
+
+        assert!(matches!(
+            validate_patches(b" ", &mut patches),
+            Err(FormatError::PatchConflict)
+        ));
+    }
+
+    #[test]
+    fn non_editable_whitespace_is_rejected() {
+        let mut patches = vec![Patch {
+            start: 0,
+            end: 1,
+            replacement: b"\n".to_vec(),
+        }];
+
+        assert!(matches!(
+            validate_patches(b"\x0b", &mut patches),
+            Err(FormatError::UnsafeRewrite)
+        ));
+    }
 }

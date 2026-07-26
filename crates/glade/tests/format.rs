@@ -741,12 +741,228 @@ fn format_preserves_items_inside_nested_blocks() {
 }
 
 #[test]
+fn format_preserves_unicode_bytes() {
+    let path = fixture_path("unicode");
+
+    fs::write(
+        &path,
+        r"struct Café {
+    valeur: i32,
+}
+fn second() {}
+",
+    )
+    .expect("write fixture");
+
+    let output = run_format(&path);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(output.stdout.is_empty());
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("{}\n", path.display())
+    );
+
+    assert_eq!(
+        fs::read(&path).expect("read formatted fixture"),
+        r"struct Café {
+    valeur: i32,
+}
+
+fn second() {}
+"
+        .as_bytes(),
+    );
+
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_preserves_lf_line_endings() {
+    let path = fixture_path("lf");
+
+    fs::write(
+        &path,
+        r"struct First {
+    value: i32,
+}
+fn second() {}
+",
+    )
+    .expect("write fixture");
+
+    let output = run_format(&path);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(output.stdout.is_empty());
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("{}\n", path.display())
+    );
+
+    assert_eq!(
+        fs::read(&path).expect("read formatted fixture"),
+        r"struct First {
+    value: i32,
+}
+
+fn second() {}
+"
+        .as_bytes(),
+    );
+
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_preserves_crlf_line_endings() {
+    let path = fixture_path("crlf");
+
+    let source = r"struct First {
+    value: i32,
+}
+fn second() {}
+";
+
+    let source = source.replace('\n', "\r\n");
+    fs::write(&path, source.as_bytes()).expect("write fixture");
+    let output = run_format(&path);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(output.stdout.is_empty());
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("{}\n", path.display())
+    );
+
+    let expected = r"struct First {
+    value: i32,
+}
+
+fn second() {}
+"
+    .replace('\n', "\r\n");
+
+    assert_eq!(
+        fs::read(&path).expect("read formatted fixture"),
+        expected.as_bytes()
+    );
+
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_rejects_mixed_line_endings_without_rewriting() {
+    let path = fixture_path("mixed-line-endings");
+
+    let source = r"struct First {
+    value: i32,
+}
+fn second() {}
+";
+
+    let source = source.replace('\n', "\r\n");
+    let source = source.trim_end_matches("\r\n").to_owned() + "\n";
+    fs::write(&path, source.as_bytes()).expect("write fixture");
+    let output = run_format(&path);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).expect("read fixture"), source.as_bytes());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("mixes LF and CRLF"));
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_rejects_malformed_source_without_rewriting() {
+    let path = fixture_path("malformed");
+
+    let source = r"fn broken(
+";
+
+    fs::write(&path, source).expect("write fixture");
+    let output = run_format(&path);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).expect("read fixture"), source.as_bytes());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("syntax errors"));
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_rejects_invalid_utf8_without_rewriting() {
+    let path = fixture_path("invalid-utf8");
+
+    let mut source = br"fn first() {}
+"
+    .to_vec();
+
+    source.push(0xFF);
+    fs::write(&path, &source).expect("write fixture");
+    let output = run_format(&path);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).expect("read fixture"), source);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not valid UTF-8"));
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_rejects_missing_structure_without_rewriting() {
+    let path = fixture_path("missing-structure");
+
+    let source = r"fn broken() {
+    let value = (1;
+}
+";
+
+    fs::write(&path, source).expect("write fixture");
+    let output = run_format(&path);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&path).expect("read fixture"), source.as_bytes());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("incomplete syntax tree"));
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
+fn format_is_idempotent() {
+    let path = fixture_path("idempotent");
+
+    fs::write(
+        &path,
+        r"struct First {
+    value: i32,
+}
+fn second() {}
+",
+    )
+    .expect("write fixture");
+
+    let first = run_format(&path);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    assert!(first.stdout.is_empty());
+
+    assert_eq!(
+        String::from_utf8_lossy(&first.stderr),
+        format!("{}\n", path.display())
+    );
+
+    let formatted = fs::read(&path).expect("read formatted fixture");
+    let second = run_format(&path);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    assert_eq!(fs::read(&path).expect("read fixture"), formatted);
+    assert!(second.stdout.is_empty());
+    assert!(second.stderr.is_empty());
+    fs::remove_file(path).expect("remove fixture");
+}
+
+#[test]
 fn verbose_flag_emits_tracing_details() {
     let path = fixture_path("verbose");
 
     fs::write(
         &path,
-        "struct First {\n    value: i32,\n}\nfn second() {}\n",
+        r"struct First {
+    value: i32,
+}
+fn second() {}
+",
     )
     .expect("write fixture");
 
