@@ -1,5 +1,5 @@
-use std::ops::Range;
 use glade_core::{Backend, BackendResult, Boundary, Diagnostic, FormatPlan, LineEnding, Severity};
+use std::ops::Range;
 use tracing::{debug, instrument, trace, warn};
 use tree_sitter::{Node, Parser as TreeSitterParser};
 pub struct RustBackend;
