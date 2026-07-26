@@ -1,11 +1,8 @@
 use std::ops::Range;
-
 use glade_core::{Backend, BackendResult, Boundary, Diagnostic, FormatPlan, LineEnding, Severity};
 use tracing::{debug, instrument, trace, warn};
 use tree_sitter::{Node, Parser as TreeSitterParser};
-
 pub struct RustBackend;
-
 const BACKEND_ID: &str = "rust";
 
 impl Backend for RustBackend {
@@ -38,6 +35,7 @@ fn plan_source(source: &[u8]) -> BackendResult {
 
     let Ok(source_text) = std::str::from_utf8(source) else {
         warn!("source is not valid UTF-8");
+
         return BackendResult::Diagnostics(vec![diagnostic(
             "Rust source is not valid UTF-8",
             None,
@@ -60,6 +58,7 @@ fn plan_source(source: &[u8]) -> BackendResult {
 
     if root.kind() != "source_file" || has_missing_node(root) {
         warn!("tree-sitter returned an incomplete syntax tree");
+
         return BackendResult::Diagnostics(vec![diagnostic(
             "Rust parser returned an incomplete syntax tree",
             None,
@@ -73,6 +72,7 @@ fn plan_source(source: &[u8]) -> BackendResult {
         let column = position.column + 1;
         let range = error.map(|node| node.start_byte()..node.end_byte());
         warn!(line, column, "tree-sitter reported syntax errors");
+
         return BackendResult::Diagnostics(vec![diagnostic(
             "Rust source contains syntax errors",
             range,
@@ -81,6 +81,7 @@ fn plan_source(source: &[u8]) -> BackendResult {
 
     let mut boundaries = Vec::new();
     format_container(source, root, line_ending, &mut boundaries);
+
     debug!(
         boundaries = boundaries.len(),
         "generated formatting boundaries"

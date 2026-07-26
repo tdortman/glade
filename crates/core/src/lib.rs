@@ -1,10 +1,8 @@
 use std::ops::Range;
-
 use thiserror::Error;
 
 pub trait Backend: Sync {
     fn id(&self) -> &'static str;
-
     fn plan(&self, source: &[u8]) -> BackendResult;
 }
 
@@ -106,6 +104,7 @@ pub fn rewrite(source: &[u8], boundaries: &[Boundary]) -> Result<Vec<u8>, Rewrit
             boundary.line_ending.bytes().len() * if boundary.required { 2 } else { 1 }
                 + boundary.indentation.len(),
         );
+
         replacement.extend_from_slice(boundary.line_ending.bytes());
 
         if boundary.required {
@@ -113,6 +112,7 @@ pub fn rewrite(source: &[u8], boundaries: &[Boundary]) -> Result<Vec<u8>, Rewrit
         }
 
         replacement.extend_from_slice(&boundary.indentation);
+
         patches.push(Patch {
             range: boundary.range.clone(),
             replacement,
@@ -189,13 +189,13 @@ mod tests {
             barrier: false,
         }
     }
+
     #[test]
     fn identical_patches_are_deduplicated() {
         let mut first = boundary(0, 1, LineEnding::Lf);
         first.required = true;
         let mut second = boundary(0, 1, LineEnding::Lf);
         second.required = true;
-
         assert_eq!(rewrite(b" ", &[first, second]).expect("safe"), b"\n\n");
     }
 
@@ -231,14 +231,12 @@ mod tests {
     fn barriers_are_not_edited() {
         let mut barrier = boundary(0, 1, LineEnding::Lf);
         barrier.barrier = true;
-
         assert_eq!(rewrite(b" ", &[barrier]).expect("safe"), b" ");
     }
 
     #[test]
     fn optional_same_line_whitespace_is_preserved() {
         let boundary = boundary(0, 1, LineEnding::Lf);
-
         assert_eq!(rewrite(b" ", &[boundary]).expect("safe"), b" ");
     }
 
@@ -246,7 +244,6 @@ mod tests {
     fn required_crlf_boundaries_keep_crlf() {
         let mut boundary = boundary(0, 2, LineEnding::CrLf);
         boundary.required = true;
-
         assert_eq!(rewrite(b"  ", &[boundary]).expect("safe"), b"\r\n\r\n");
     }
 }

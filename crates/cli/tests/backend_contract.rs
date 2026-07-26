@@ -10,6 +10,7 @@ mod fixtures;
 use glade_cli::{
     BackendRegistration, RegistryError, backend_for_extension, backend_registry, validate_registry,
 };
+
 use glade_core::{Backend, BackendResult, FormatPlan, rewrite};
 
 fn registered_backends() -> impl Iterator<Item = &'static dyn Backend> {
@@ -39,6 +40,7 @@ fn registered_extensions_are_unique_and_select_the_declared_backend() {
 fn every_registered_backend_preserves_selected_source_ranges() {
     for backend in registered_backends() {
         let fixture = fixture_for(backend);
+
         let BackendResult::Ready(plan) = backend.plan(fixture.formatting_source) else {
             panic!("{} rejected its formatting fixture", backend.id());
         };
@@ -48,9 +50,12 @@ fn every_registered_backend_preserves_selected_source_ranges() {
             "{} emitted no boundaries",
             backend.id()
         );
+
         assert_safe_plan(backend, fixture.formatting_source, &plan);
+
         let formatted =
             rewrite(fixture.formatting_source, &plan.boundaries).expect("backend plan is safe");
+
         assert_eq!(formatted, fixture.formatting_expected);
 
         let BackendResult::Ready(second_plan) = backend.plan(&formatted) else {
@@ -71,18 +76,18 @@ fn every_registered_backend_preserves_line_endings() {
         let source = with_crlf(fixture.formatting_source);
         let path = fixture_path(fixture.extension, "line-endings");
         fs::write(&path, &source).expect("write CRLF fixture");
-
         let first = run_cli("format", &path);
         assert!(first.status.success(), "stderr: {:?}", first.stderr);
         let formatted = fs::read(&path).expect("read formatted CRLF fixture");
         assert!(!has_lone_lf(&formatted));
-
         let second = run_cli("format", &path);
         assert!(second.status.success(), "stderr: {:?}", second.stderr);
+
         assert_eq!(
             fs::read(&path).expect("read second formatted fixture"),
             formatted
         );
+
         fs::remove_file(path).expect("remove CRLF fixture");
     }
 }
@@ -93,13 +98,14 @@ fn every_registered_backend_preserves_comment_barriers() {
         let fixture = fixture_for(backend);
         let path = fixture_path(fixture.extension, "barrier");
         fs::write(&path, fixture.barrier_source).expect("write barrier fixture");
-
         let output = run_cli("format", &path);
         assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
         assert_eq!(
             fs::read(&path).expect("read formatted barrier fixture"),
             fixture.barrier_source
         );
+
         fs::remove_file(path).expect("remove barrier fixture");
     }
 }
@@ -108,6 +114,7 @@ fn every_registered_backend_preserves_comment_barriers() {
 fn every_registered_backend_reports_errors_without_a_rewrite_plan() {
     for backend in registered_backends() {
         let fixture = fixture_for(backend);
+
         let BackendResult::Diagnostics(diagnostics) = backend.plan(fixture.malformed_source) else {
             panic!("{} accepted malformed input", backend.id());
         };
@@ -117,6 +124,7 @@ fn every_registered_backend_reports_errors_without_a_rewrite_plan() {
             "{} returned no diagnostics",
             backend.id()
         );
+
         assert!(
             diagnostics
                 .iter()
@@ -131,7 +139,6 @@ fn explicit_file_selection_and_diagnostics_are_deterministic() {
         let fixture = fixture_for(backend);
         let path = fixture_path(fixture.extension, "diagnostics");
         fs::write(&path, fixture.malformed_source).expect("write malformed fixture");
-
         let first = run_cli("check", &path);
         assert_eq!(first.status.code(), Some(2));
         assert!(first.stdout.is_empty());
@@ -139,7 +146,6 @@ fn explicit_file_selection_and_diagnostics_are_deterministic() {
         assert!(stderr.contains(&path.display().to_string()));
         assert!(stderr.contains(backend.id()));
         assert!(stderr.contains("line"));
-
         let second = run_cli("check", &path);
         assert_eq!(first.status.code(), second.status.code());
         assert_eq!(first.stdout, second.stdout);
@@ -152,6 +158,7 @@ fn assert_safe_plan(backend: &dyn Backend, source: &[u8], plan: &FormatPlan) {
     for boundary in &plan.boundaries {
         assert!(boundary.range.start <= boundary.range.end);
         assert!(boundary.range.end <= source.len());
+
         assert!(
             boundary
                 .indentation
@@ -189,6 +196,7 @@ fn fixture_path(extension: &str, name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock is after epoch")
         .as_nanos();
+
     PathBuf::from(format!(
         "{}/glade-contract-{}-{name}-{nonce}.{extension}",
         std::env::temp_dir().display(),

@@ -64,6 +64,7 @@ pub struct BackendRegistration {
 }
 
 static RUST_BACKEND: RustBackend = RustBackend;
+
 static BACKEND_REGISTRY: &[BackendRegistration] = &[BackendRegistration {
     backend: &RUST_BACKEND,
     extensions: &["rs"],
@@ -145,6 +146,7 @@ fn diagnostic_text(source: &[u8], diagnostic: &Diagnostic) -> String {
         let (line, column) = byte_position(source, range.start);
         format!(" at line {line}, column {column}")
     });
+
     let severity = match diagnostic.severity {
         glade_core::Severity::Error => "error",
         glade_core::Severity::Warning => "warning",
@@ -165,6 +167,7 @@ fn report_diagnostics(path: &Path, source: &[u8], diagnostics: &[Diagnostic]) {
             message = %diagnostic.message,
             "backend diagnostic"
         );
+
         eprintln!(
             "{}: {}",
             path.display(),
@@ -175,15 +178,18 @@ fn report_diagnostics(path: &Path, source: &[u8], diagnostics: &[Diagnostic]) {
 
 fn byte_position(source: &[u8], byte: usize) -> (usize, usize) {
     let byte = byte.min(source.len());
+
     let line_start = source[..byte]
         .iter()
         .rposition(|value| *value == b'\n')
         .map_or(0, |position| position + 1);
+
     let mut line = 1;
 
     for value in &source[..byte] {
         line += usize::from(*value == b'\n');
     }
+
     (line, byte - line_start + 1)
 }
 
@@ -268,6 +274,7 @@ fn unsupported_extension() -> FileError {
         .flat_map(|registration| registration.extensions)
         .copied()
         .collect();
+
     extensions.sort_unstable();
     extensions.dedup();
 
@@ -276,6 +283,7 @@ fn unsupported_extension() -> FileError {
         .map(|extension| format!(".{extension}"))
         .collect::<Vec<_>>()
         .join(", ");
+
     FileError::UnsupportedExtension { expected }
 }
 
@@ -285,8 +293,8 @@ fn process_file(path: &Path, mode: Mode) -> Result<ProcessResult, FileError> {
         .extension()
         .and_then(|extension| extension.to_str())
         .ok_or_else(unsupported_extension)?;
-    let backend = backend_for_extension(extension).ok_or_else(unsupported_extension)?;
 
+    let backend = backend_for_extension(extension).ok_or_else(unsupported_extension)?;
     debug!(backend = backend.id(), "selected backend");
     debug!("reading source");
     let source = fs::read(path)?;
