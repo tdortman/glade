@@ -1,0 +1,21 @@
+[package]
+name = "glade_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "glade"
+path = "src/main.rs"
+
+[dependencies]
+backend-rust = { path = "../backend-rust" }
+clap.workspace = true
+glade_core = { path = "../core" }
+similar.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
