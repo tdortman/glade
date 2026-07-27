@@ -9,6 +9,8 @@ name = "glade"
 path = "src/main.rs"
 
 [dependencies]
+backend-cpp = { path = "../backend-cpp" }
+backend-cuda = { path = "../backend-cuda" }
 backend-rust = { path = "../backend-rust" }
 clap.workspace = true
 glade_core = { path = "../core" }

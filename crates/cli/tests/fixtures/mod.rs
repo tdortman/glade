@@ -1,3 +1,5 @@
+pub mod cpp;
+pub mod cuda;
 pub mod rust;
 
 #[derive(Clone, Copy)]
@@ -12,6 +14,8 @@ pub struct ContractFixture {
 #[must_use]
 pub fn for_backend(id: &str) -> Option<ContractFixture> {
     match id {
+        "cpp" => Some(cpp::FIXTURE),
+        "cuda" => Some(cuda::FIXTURE),
         "rust" => Some(rust::FIXTURE),
         _ => None,
     }

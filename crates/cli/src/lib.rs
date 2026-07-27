@@ -1,8 +1,9 @@
+use backend_cpp::CppBackend;
+use backend_cuda::CudaBackend;
 use backend_rust::RustBackend;
 use clap::{ArgAction, Parser, Subcommand};
 use glade_core::{Backend, BackendResult, Diagnostic, RewriteError, rewrite};
 use similar::TextDiff;
-
 use std::{
     borrow::Cow,
     collections::HashSet,
@@ -12,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     process,
 };
-
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_subscriber::filter::LevelFilter;
@@ -64,12 +64,24 @@ pub struct BackendRegistration {
     pub extensions: &'static [&'static str],
 }
 
+static CPP_BACKEND: CppBackend = CppBackend;
+static CUDA_BACKEND: CudaBackend = CudaBackend;
 static RUST_BACKEND: RustBackend = RustBackend;
 
-static BACKEND_REGISTRY: &[BackendRegistration] = &[BackendRegistration {
-    backend: &RUST_BACKEND,
-    extensions: &["rs"],
-}];
+static BACKEND_REGISTRY: &[BackendRegistration] = &[
+    BackendRegistration {
+        backend: &CPP_BACKEND,
+        extensions: &["cpp", "hpp", "cc", "cxx", "hxx", "hh"],
+    },
+    BackendRegistration {
+        backend: &CUDA_BACKEND,
+        extensions: &["cu", "cuh"],
+    },
+    BackendRegistration {
+        backend: &RUST_BACKEND,
+        extensions: &["rs"],
+    },
+];
 
 #[must_use]
 pub fn backend_registry() -> &'static [BackendRegistration] {
