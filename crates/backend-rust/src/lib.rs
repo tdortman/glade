@@ -167,14 +167,21 @@ fn format_container(
         })
         .collect();
 
-    for pair in boundary_spans.windows(2) {
+    for (pair_index, pair) in boundary_spans.windows(2).enumerate() {
         let [previous, next] = pair else {
             unreachable!()
         };
 
+        let previous_child = children[eligible_indices[pair_index]];
+        let next_child = children[eligible_indices[pair_index + 1]];
+        let import_subgroup_barrier = previous_child.kind() == "use_declaration"
+            && next_child.kind() == "use_declaration"
+            && has_blank_line(&source[previous.end..next.start]);
+        let force_after =
+            previous_child.kind() == "use_declaration" && next_child.kind() != "use_declaration";
         let range = previous.end..next.start;
-        let required = previous.multiline || next.multiline;
-        let barrier = previous.barrier_after || next.barrier_before;
+        let required = previous.multiline || next.multiline || force_after;
+        let barrier = previous.barrier_after || next.barrier_before || import_subgroup_barrier;
 
         boundaries.push(Boundary {
             range,
@@ -492,7 +499,6 @@ fn boundary_span(
         && start != construct.start_byte()
         && matches!(children[previous].kind(), "line_comment" | "block_comment")
         && has_blank_line(&source[children[previous - 1].end_byte()..start]);
-
     let barrier_after = next > index + 1
         && children
             .get(next)

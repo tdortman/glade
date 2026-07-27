@@ -1091,3 +1091,31 @@ fn missing_files_are_usage_errors() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("required"));
 }
+
+#[test]
+fn format_preserves_use_subgroups_and_separates_following_items() {
+    let path = fixture_path("use-subgroups");
+    let source = r"use std::fmt;
+
+use std::io;
+fn main() {}
+";
+
+    fs::write(&path, source).expect("write fixture");
+
+    let output = run_format(&path);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert_eq!(
+        fs::read_to_string(&path).expect("read formatted fixture"),
+        r"use std::fmt;
+
+use std::io;
+
+fn main() {}
+"
+    );
+
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    fs::remove_file(path).expect("remove fixture");
+}
