@@ -10,6 +10,7 @@ mod fixtures;
 use glade_cli::{
     BackendRegistration, RegistryError, backend_for_extension, backend_registry, validate_registry,
 };
+
 use glade_core::{Backend, BackendResult, FormatPlan, rewrite};
 
 fn registered_backends() -> impl Iterator<Item = &'static dyn Backend> {

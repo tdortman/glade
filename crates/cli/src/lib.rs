@@ -4,6 +4,7 @@ use backend_rust::RustBackend;
 use clap::{ArgAction, Parser, Subcommand};
 use glade_core::{Backend, BackendResult, Diagnostic, RewriteError, rewrite};
 use similar::TextDiff;
+
 use std::{
     borrow::Cow,
     collections::HashSet,
@@ -13,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process,
 };
+
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_subscriber::filter::LevelFilter;

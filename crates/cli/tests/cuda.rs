@@ -24,6 +24,7 @@ fn formats_cuda_kernel_source_with_kernel_launches() {
 int host_helper() { return 0; }
 __device__ void helper() {}
 ";
+
     let expected = b"__global__ void kernel() {
     kernel<<<1, 1>>>();
     kernel<<<1, 1>>>();
@@ -32,7 +33,9 @@ __device__ void helper() {}
 int host_helper() { return 0; }
 __device__ void helper() {}
 ";
+
     let backend = CudaBackend;
+
     let BackendResult::Ready(plan) = backend.plan(source) else {
         panic!("CUDA fixture was rejected");
     };
@@ -46,15 +49,18 @@ __device__ void helper() {}
 #[test]
 fn selects_cuh_files_through_the_cli() {
     let path = std::env::temp_dir().join(format!("glade-cuda-{}.cuh", std::process::id()));
+
     let source = b"__global__ void kernel() {
 }
 __device__ void helper() {}
 ";
+
     let expected = b"__global__ void kernel() {
 }
 
 __device__ void helper() {}
 ";
+
     fs::write(&path, source).expect("write CUDA header fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_glade"))

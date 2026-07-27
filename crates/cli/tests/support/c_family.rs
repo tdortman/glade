@@ -33,6 +33,7 @@ default:
 }
 }
 ";
+
     let expected = b"#define VALUE 1
 
 template <typename T>
@@ -89,6 +90,7 @@ pub fn keeps_trailing_comments_with_their_declaration(backend: &dyn Backend) {
     let source = b"int first; // tail
 int second;
 ";
+
     let BackendResult::Ready(plan) = backend.plan(source) else {
         panic!("{} comment fixture was rejected", backend.id());
     };
@@ -109,6 +111,7 @@ int conditional;
 int second();
 }
 ";
+
     let expected = b"namespace outer {
 [[nodiscard]]
 int first();
@@ -120,6 +123,7 @@ int conditional;
 int second();
 }
 ";
+
     let BackendResult::Ready(plan) = backend.plan(source) else {
         panic!("{} namespace fixture was rejected", backend.id());
     };
@@ -140,6 +144,7 @@ void launch(char* output) {
     kernel<<<1, 1>>>(output);
 }
 ";
+
     let BackendResult::Ready(plan) = backend.plan(source) else {
         panic!("{} CUDA extension fixture was rejected", backend.id());
     };
@@ -156,6 +161,7 @@ pub fn formats_preprocessor_boundaries(backend: &dyn Backend) {
 #include <string>
 namespace example {}
 ";
+
     let expected = b"#pragma once
 
 #include <vector>
@@ -163,6 +169,7 @@ namespace example {}
 
 namespace example {}
 ";
+
     let BackendResult::Ready(plan) = backend.plan(source) else {
         panic!("{} preprocessor fixture was rejected", backend.id());
     };

@@ -61,6 +61,7 @@ pub fn plan_source(
         let tree = parser
             .parse(source_text, None)
             .expect("Tree-sitter returns a tree");
+
         let root = tree.root_node();
 
         if root.kind() != "translation_unit" || has_missing_node(root) {
@@ -188,12 +189,15 @@ fn format_container(
 
         let previous_child = children[eligible_indices[pair_index]];
         let next_child = children[eligible_indices[pair_index + 1]];
+
         let include_subgroup_barrier = previous_child.kind() == "preproc_include"
             && next_child.kind() == "preproc_include"
             && has_blank_line(&source[previous.end..next.start]);
+
         let force_after = is_pragma_once(source, previous_child)
             || (previous_child.kind() == "preproc_include"
                 && next_child.kind() != "preproc_include");
+
         let range = previous.end..next.start;
         let required = previous.multiline || next.multiline || force_after;
         let barrier = previous.barrier_after || next.barrier_before || include_subgroup_barrier;
@@ -237,6 +241,7 @@ fn format_nested_containers(
     }
 
     let mut cursor = node.walk();
+
     for child in node.named_children(&mut cursor) {
         format_nested_containers(source, child, line_ending, boundaries);
     }
@@ -388,6 +393,7 @@ fn boundary_span(
 
     let mut end = boundary_end(source, construct);
     let mut next = index + 1;
+
     if let Some(separator) = separator {
         let limit = children.get(next).map_or(source.len(), Node::start_byte);
         let mut separator_start = end;
@@ -452,6 +458,7 @@ fn is_pragma_once(source: &[u8], node: Node<'_>) -> bool {
     }
 
     let text = &source[node.start_byte()..node.end_byte()];
+
     let mut tokens = text
         .split(u8::is_ascii_whitespace)
         .filter(|token| !token.is_empty());
@@ -512,10 +519,12 @@ fn has_preceding_eligible_on_line(
 #[instrument(skip(source), fields(bytes = source.len()))]
 fn line_ending(source: &[u8]) -> Option<LineEnding> {
     let has_crlf = source.windows(2).any(|pair| pair == b"\r\n");
+
     let has_lf = source
         .iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'\n' && (index == 0 || source[index - 1] != b'\r'));
+
     let has_lone_cr = source
         .iter()
         .enumerate()
@@ -546,6 +555,7 @@ fn has_blank_line(bytes: &[u8]) -> bool {
         }
 
         let mut next = index + 1;
+
         while next < bytes.len() && matches!(bytes[next], b' ' | b'\t' | b'\r') {
             next += 1;
         }
@@ -568,6 +578,7 @@ fn line_indent(source: &[u8], position: usize) -> &[u8] {
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index + 1);
+
     let end = source[start..position]
         .iter()
         .position(|byte| !matches!(byte, b' ' | b'\t'))
