@@ -8,6 +8,7 @@ license.workspace = true
 backend-c-family = { path = "../backend-c-family" }
 glade_core = { path = "../core" }
 tree-sitter-cpp.workspace = true
+tree-sitter-cuda.workspace = true
 
 [lints]
 workspace = true

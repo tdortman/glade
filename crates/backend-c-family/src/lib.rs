@@ -3,15 +3,19 @@ use std::ops::Range;
 use tracing::{debug, instrument, trace, warn};
 use tree_sitter::{Language, Node, Parser as TreeSitterParser};
 
-#[instrument(skip(source, language), fields(bytes = source.len(), backend = backend_id))]
-/// Plans source formatting using a C-family Tree-sitter grammar.
+#[instrument(skip(source, languages), fields(bytes = source.len(), backend = backend_id))]
+/// Plans source formatting using one or more C-family Tree-sitter grammars.
+///
+/// Grammars are tried in order. This lets C++-family extensions use the CUDA
+/// grammar when CUDA syntax is present while retaining the plain C++ grammar
+/// as a compatibility fallback.
 ///
 /// # Panics
 ///
-/// Panics when the supplied grammar cannot be loaded by Tree-sitter.
+/// Panics when a supplied grammar cannot be loaded by Tree-sitter.
 pub fn plan_source(
     source: &[u8],
-    language: &Language,
+    languages: &[&Language],
     backend_id: &'static str,
     language_name: &'static str,
 ) -> BackendResult {
@@ -43,44 +47,50 @@ pub fn plan_source(
     };
 
     let mut parser = TreeSitterParser::new();
-    parser
-        .set_language(language)
-        .expect("C-family grammar loads");
+    let mut selected_tree = None;
+    let mut saw_incomplete_tree = false;
+    let mut error_range = None;
 
-    trace!("parsing source with tree-sitter");
+    for language in languages {
+        parser
+            .set_language(language)
+            .expect("C-family grammar loads");
 
-    let tree = parser
-        .parse(source_text, None)
-        .expect("Tree-sitter returns a tree");
-    let root = tree.root_node();
+        trace!("parsing source with tree-sitter");
 
-    if root.kind() != "translation_unit" || has_missing_node(root) {
-        warn!("tree-sitter returned an incomplete syntax tree");
+        let tree = parser
+            .parse(source_text, None)
+            .expect("Tree-sitter returns a tree");
+        let root = tree.root_node();
 
-        return BackendResult::Diagnostics(vec![diagnostic(
-            backend_id,
-            format!("{language_name} parser returned an incomplete syntax tree"),
-            None,
-        )]);
+        if root.kind() != "translation_unit" || has_missing_node(root) {
+            saw_incomplete_tree = true;
+            continue;
+        }
+
+        if root.has_error() {
+            error_range = first_error_node(root).map(|node| node.start_byte()..node.end_byte());
+            continue;
+        }
+
+        selected_tree = Some(tree);
+        break;
     }
 
-    if root.has_error() {
-        let error = first_error_node(root);
-        let position = error.map_or_else(|| root.start_position(), |node| node.start_position());
-        let line = position.row + 1;
-        let column = position.column + 1;
-        let range = error.map(|node| node.start_byte()..node.end_byte());
-        warn!(line, column, "tree-sitter reported syntax errors");
+    let Some(tree) = selected_tree else {
+        warn!("all C-family grammars rejected the source");
 
-        return BackendResult::Diagnostics(vec![diagnostic(
-            backend_id,
-            format!("{language_name} source contains syntax errors"),
-            range,
-        )]);
-    }
+        let message = if saw_incomplete_tree && error_range.is_none() {
+            format!("{language_name} parser returned an incomplete syntax tree")
+        } else {
+            format!("{language_name} source contains syntax errors")
+        };
+
+        return BackendResult::Diagnostics(vec![diagnostic(backend_id, message, error_range)]);
+    };
 
     let mut boundaries = Vec::new();
-    format_container(source, root, line_ending, &mut boundaries);
+    format_container(source, tree.root_node(), line_ending, &mut boundaries);
 
     debug!(
         boundaries = boundaries.len(),
@@ -137,11 +147,12 @@ fn format_container(
 ) {
     let children = named_children(container);
     let separator = separator_for(container.kind());
+
     let eligible_indices: Vec<_> = children
         .iter()
         .enumerate()
-        .filter_map(|(index, child)| {
-            is_eligible_child(container.kind(), child.kind()).then_some(index)
+        .filter_map(|(index, _child)| {
+            is_primary_eligible_child(&children, index, container.kind()).then_some(index)
         })
         .collect();
 
@@ -170,14 +181,22 @@ fn format_container(
         })
         .collect();
 
-    for pair in boundary_spans.windows(2) {
+    for (pair_index, pair) in boundary_spans.windows(2).enumerate() {
         let [previous, next] = pair else {
             unreachable!()
         };
 
+        let previous_child = children[eligible_indices[pair_index]];
+        let next_child = children[eligible_indices[pair_index + 1]];
+        let include_subgroup_barrier = previous_child.kind() == "preproc_include"
+            && next_child.kind() == "preproc_include"
+            && has_blank_line(&source[previous.end..next.start]);
+        let force_after = is_pragma_once(source, previous_child)
+            || (previous_child.kind() == "preproc_include"
+                && next_child.kind() != "preproc_include");
         let range = previous.end..next.start;
-        let required = previous.multiline || next.multiline;
-        let barrier = previous.barrier_after || next.barrier_before;
+        let required = previous.multiline || next.multiline || force_after;
+        let barrier = previous.barrier_after || next.barrier_before || include_subgroup_barrier;
 
         boundaries.push(Boundary {
             range,
@@ -252,15 +271,23 @@ fn is_eligible_child(container: &str, child: &str) -> bool {
     if is_atomic(child) {
         return true;
     }
+
     match container {
-        "translation_unit" | "declaration_list" => is_declaration(child),
+        "translation_unit" => is_declaration(child) || child == "expression_statement",
+        "declaration_list" => is_declaration(child),
         "field_declaration_list" => is_member(child),
         "enumerator_list" => child == "enumerator",
+
         "compound_statement" | "case_statement" | "labeled_statement" => {
             is_statement_or_declaration(child)
         }
+
         _ => false,
     }
+}
+
+fn is_primary_eligible_child(children: &[Node<'_>], index: usize, container: &str) -> bool {
+    is_eligible_child(container, children[index].kind())
 }
 
 fn is_declaration(kind: &str) -> bool {
@@ -326,11 +353,13 @@ fn boundary_span(
     eligible: &[usize],
 ) -> BoundarySpan {
     let construct = children[index];
+
     let mut start = if container.kind() == "case_statement" && index == eligible[0] {
         container.start_byte()
     } else {
         construct.start_byte()
     };
+
     let mut previous = if container.kind() == "case_statement" && index == eligible[0] {
         0
     } else {
@@ -359,7 +388,6 @@ fn boundary_span(
 
     let mut end = boundary_end(source, construct);
     let mut next = index + 1;
-
     if let Some(separator) = separator {
         let limit = children.get(next).map_or(source.len(), Node::start_byte);
         let mut separator_start = end;
@@ -399,6 +427,7 @@ fn boundary_span(
         && start != construct.start_byte()
         && children[previous].kind() == "comment"
         && has_blank_line(&source[children[previous - 1].end_byte()..start]);
+
     let barrier_after = next > index + 1
         && children
             .get(next)
@@ -417,14 +446,33 @@ fn is_attachment(node: Node<'_>) -> bool {
     matches!(node.kind(), "comment" | "attribute_specifier")
 }
 
+fn is_pragma_once(source: &[u8], node: Node<'_>) -> bool {
+    if node.kind() != "preproc_call" {
+        return false;
+    }
+
+    let text = &source[node.start_byte()..node.end_byte()];
+    let mut tokens = text
+        .split(u8::is_ascii_whitespace)
+        .filter(|token| !token.is_empty());
+
+    match (tokens.next(), tokens.next(), tokens.next()) {
+        (Some(b"#pragma"), Some(b"once"), None) => true,
+        (Some(b"#"), Some(b"pragma"), Some(b"once")) => tokens.next().is_none(),
+        _ => false,
+    }
+}
+
 fn boundary_end(source: &[u8], node: Node<'_>) -> usize {
     if !is_atomic(node.kind()) {
         return node.end_byte();
     }
 
     let mut end = node.end_byte();
+
     if source.get(end.saturating_sub(1)) == Some(&b'\n') {
         end -= 1;
+
         if source.get(end.saturating_sub(1)) == Some(&b'\r') {
             end -= 1;
         }

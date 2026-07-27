@@ -20,3 +20,15 @@ fn preserves_cpp_attributes_and_conditional_preprocessor_subtrees() {
     let backend = CppBackend;
     c_family::preserves_attributes_and_conditional_preprocessor_subtrees(&backend);
 }
+
+#[test]
+fn accepts_cuda_extensions_in_cpp_headers() {
+    let backend = CppBackend;
+    c_family::accepts_cuda_extensions_in_cpp_family(&backend);
+}
+
+#[test]
+fn formats_cpp_preprocessor_boundaries() {
+    let backend = CppBackend;
+    c_family::formats_preprocessor_boundaries(&backend);
+}

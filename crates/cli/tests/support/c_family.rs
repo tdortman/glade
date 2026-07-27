@@ -129,3 +129,46 @@ int second();
         expected
     );
 }
+
+pub fn accepts_cuda_extensions_in_cpp_family(backend: &dyn Backend) {
+    let source = b"template <typename T>
+__global__ void kernel(T* output) {
+    output[0] = T{};
+}
+
+void launch(char* output) {
+    kernel<<<1, 1>>>(output);
+}
+";
+    let BackendResult::Ready(plan) = backend.plan(source) else {
+        panic!("{} CUDA extension fixture was rejected", backend.id());
+    };
+
+    assert_eq!(
+        rewrite(source, &plan.boundaries).expect("safe CUDA extension plan"),
+        source
+    );
+}
+
+pub fn formats_preprocessor_boundaries(backend: &dyn Backend) {
+    let source = b"#pragma once
+#include <vector>
+#include <string>
+namespace example {}
+";
+    let expected = b"#pragma once
+
+#include <vector>
+#include <string>
+
+namespace example {}
+";
+    let BackendResult::Ready(plan) = backend.plan(source) else {
+        panic!("{} preprocessor fixture was rejected", backend.id());
+    };
+
+    assert_eq!(
+        rewrite(source, &plan.boundaries).expect("safe preprocessor plan"),
+        expected
+    );
+}

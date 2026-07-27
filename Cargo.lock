@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "backend-c-family"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "glade_core",
  "tracing",
@@ -72,16 +72,17 @@ dependencies = [
 
 [[package]]
 name = "backend-cpp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "backend-c-family",
  "glade_core",
  "tree-sitter-cpp",
+ "tree-sitter-cuda",
 ]
 
 [[package]]
 name = "backend-cuda"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "backend-c-family",
  "glade_core",
@@ -90,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "backend-rust"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "glade_core",
  "tracing",
@@ -184,7 +185,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "glade_cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "backend-cpp",
  "backend-cuda",
@@ -199,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "glade_core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "thiserror",
 ]

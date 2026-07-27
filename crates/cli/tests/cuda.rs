@@ -11,6 +11,8 @@ fn runs_cpp_structural_suite_for_cuda() {
     c_family::formats_structural_containers_and_markers(&backend);
     c_family::keeps_trailing_comments_with_their_declaration(&backend);
     c_family::preserves_attributes_and_conditional_preprocessor_subtrees(&backend);
+    c_family::accepts_cuda_extensions_in_cpp_family(&backend);
+    c_family::formats_preprocessor_boundaries(&backend);
 }
 
 #[test]
