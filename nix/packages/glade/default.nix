@@ -19,11 +19,13 @@ rust.rustPlatform.buildRustPackage {
     rust.rustPlatform.bindgenHook
   ];
 
+  cargoLock.lockFile = "${src}/Cargo.lock";
   doCheck = true;
   useNextest = true;
 
   meta = with lib; {
     description = "A tool for inserting whitespace between crowded code blocks";
     license = licenses.mit;
+    mainProgram = "glade";
   };
 }
