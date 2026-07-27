@@ -51,9 +51,11 @@ Glade changes boundary whitespace only. Comments, attributes, tokens, indentatio
 
 ## Supported languages
 
-| Language | Extensions | Status    |
-| -------- | ---------- | --------- |
-| Rust     | `.rs`      | Supported |
+| Language | Extensions                                   | Status    |
+| -------- | -------------------------------------------- | --------- |
+| Rust     | `.rs`                                        | Supported |
+| C++      | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`, `.hh` | Supported |
+| CUDA     | `.cu`, `.cuh`                                | Supported |
 
 Language support is selected by file extension. Unsupported extensions fail instead of being passed to the wrong formatter.
 
@@ -83,7 +85,7 @@ Diagnostics go to stderr. `check` diffs and success output go to stdout.
 
 ## Behaviour
 
-Glade inserts one blank line between adjacent constructs when either boundary span is multiline. Boundary spans include owned outer attributes and attached comments. Standalone comment barriers, macro bodies, nested expressions, and container edges remain untouched.
+Glade inserts one blank line between adjacent constructs when either boundary span is multiline. Boundary spans include owned outer attributes and attached comments. Standalone comment barriers, macro bodies, preprocessor subtrees, nested expressions, and container edges remain untouched.
 
 Files with parser errors or mixed line endings are left byte-for-byte unchanged. LF and CRLF files retain their existing line-ending style. Formatting is idempotent, so running it twice produces the same bytes as running it once.
 
